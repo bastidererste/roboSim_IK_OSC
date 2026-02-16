@@ -52,6 +52,35 @@ def vec_len(a: tuple[float, float, float]) -> float:
     return math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
 
 
+def quat_rotate_vec(quat: tuple[float, float, float, float], vec: tuple[float, float, float]) -> tuple[float, float, float]:
+    m = p.getMatrixFromQuaternion(quat)
+    return (
+        float(m[0] * vec[0] + m[1] * vec[1] + m[2] * vec[2]),
+        float(m[3] * vec[0] + m[4] * vec[1] + m[5] * vec[2]),
+        float(m[6] * vec[0] + m[7] * vec[1] + m[8] * vec[2]),
+    )
+
+
+def tcp_from_flange(
+    flange_pos: tuple[float, float, float],
+    flange_orn: tuple[float, float, float, float],
+    tcp_offset_local: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    if abs(tcp_offset_local[0]) < EPS and abs(tcp_offset_local[1]) < EPS and abs(tcp_offset_local[2]) < EPS:
+        return flange_pos
+    return vec_add(flange_pos, quat_rotate_vec(flange_orn, tcp_offset_local))
+
+
+def flange_from_tcp(
+    tcp_pos: tuple[float, float, float],
+    flange_orn: tuple[float, float, float, float],
+    tcp_offset_local: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    if abs(tcp_offset_local[0]) < EPS and abs(tcp_offset_local[1]) < EPS and abs(tcp_offset_local[2]) < EPS:
+        return tcp_pos
+    return vec_sub(tcp_pos, quat_rotate_vec(flange_orn, tcp_offset_local))
+
+
 def map_pos_axes(pos: tuple[float, float, float], axis_signs: tuple[float, float, float]) -> tuple[float, float, float]:
     sx, sy, sz = axis_signs
     return (sx * pos[0], sy * pos[1], sz * pos[2])
@@ -145,9 +174,11 @@ class OSCBridge:
         out_ip: str,
         out_port: int,
         axis_signs: tuple[float, float, float] = (1.0, 1.0, 1.0),
+        tcp_offset_local: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ) -> None:
         self.shared = shared
         self.axis_signs = axis_signs
+        self.tcp_offset_local = tcp_offset_local
         self.client = SimpleUDPClient(out_ip, out_port)
         self.dispatcher = Dispatcher()
         self.server: Optional[ThreadingOSCUDPServer] = None
@@ -304,8 +335,9 @@ class OSCBridge:
                     self.client.send_message(f"/joint_world/{name}/z", float(pos[2]))
 
         if emit_ee:
-            ee_pos, _ = get_ee_pose(robot_id, ee_link_index)
-            out_ee_pos = self._sim_to_osc_pos(ee_pos)
+            ee_pos, ee_orn = get_ee_pose(robot_id, ee_link_index)
+            tcp_pos = tcp_from_flange(ee_pos, ee_orn, self.tcp_offset_local)
+            out_ee_pos = self._sim_to_osc_pos(tcp_pos)
             self.client.send_message("/ee/x", float(out_ee_pos[0]))
             self.client.send_message("/ee/y", float(out_ee_pos[1]))
             self.client.send_message("/ee/z", float(out_ee_pos[2]))
@@ -502,6 +534,14 @@ def parse_args() -> argparse.Namespace:
         help="Also stream world XYZ per controllable joint as /joint_world/<name>/(x|y|z).",
     )
     parser.add_argument("--no-ee", action="store_true", help="Disable /ee/x /ee/y /ee/z outputs")
+    parser.add_argument(
+        "--tcp-offset",
+        nargs=3,
+        type=float,
+        metavar=("TX", "TY", "TZ"),
+        default=(0.0, 0.0, 0.0),
+        help="TCP offset from EE link origin in EE local frame (meters).",
+    )
     parser.add_argument("--coord-flip-x", action="store_true", help="Mirror X axis between OSC and simulator frames")
     parser.add_argument("--coord-flip-y", action="store_true", help="Mirror Y axis between OSC and simulator frames")
     parser.add_argument("--coord-flip-z", action="store_true", help="Mirror Z axis between OSC and simulator frames")
@@ -540,7 +580,9 @@ def main() -> None:
         raise RuntimeError("No controllable (revolute/prismatic) joints found")
 
     ee_link_index = resolve_ee_link_index(robot_id, controllable_joints, args.ee_link_index)
-    init_pos, init_orn = get_ee_pose(robot_id, ee_link_index)
+    init_flange_pos, init_orn = get_ee_pose(robot_id, ee_link_index)
+    tcp_offset_local = (float(args.tcp_offset[0]), float(args.tcp_offset[1]), float(args.tcp_offset[2]))
+    init_pos = tcp_from_flange(init_flange_pos, init_orn, tcp_offset_local)
 
     axis_signs = (
         -1.0 if args.coord_flip_x else 1.0,
@@ -548,7 +590,7 @@ def main() -> None:
         -1.0 if args.coord_flip_z else 1.0,
     )
     shared = SharedTargetState(init_pos, init_orn, args.default_speed)
-    osc = OSCBridge(shared, args.out_ip, args.out_port, axis_signs=axis_signs)
+    osc = OSCBridge(shared, args.out_ip, args.out_port, axis_signs=axis_signs, tcp_offset_local=tcp_offset_local)
     osc.start_server(args.in_ip, args.in_port)
 
     print(f"OSC IN : {args.in_ip}:{args.in_port}", flush=True)
@@ -556,6 +598,7 @@ def main() -> None:
     print(f"Robot URDF: {args.robot_urdf}", flush=True)
     print(f"Controllable joints ({len(controllable_joints)}): {', '.join(joint_names)}", flush=True)
     print(f"EE link index: {ee_link_index}", flush=True)
+    print(f"TCP offset local (m): ({tcp_offset_local[0]:+.4f}, {tcp_offset_local[1]:+.4f}, {tcp_offset_local[2]:+.4f})", flush=True)
     print(f"Coord axis signs (x,y,z): ({axis_signs[0]:+.0f}, {axis_signs[1]:+.0f}, {axis_signs[2]:+.0f})", flush=True)
     print(f"Joint output units: {'degrees for revolute joints' if args.joint_output_deg else 'radians'}", flush=True)
     if args.osc_out_hz > 0.0:
@@ -576,16 +619,18 @@ def main() -> None:
             speed, new_goal, goal_pos, goal_orn = osc.consume_goal_snapshot()
 
             if new_goal:
-                current_ee_pos, current_ee_orn = get_ee_pose(robot_id, ee_link_index)
-                motion_plan = build_motion_plan(current_ee_pos, current_ee_orn, goal_pos, goal_orn)
+                current_flange_pos, current_ee_orn = get_ee_pose(robot_id, ee_link_index)
+                current_tcp_pos = tcp_from_flange(current_flange_pos, current_ee_orn, tcp_offset_local)
+                motion_plan = build_motion_plan(current_tcp_pos, current_ee_orn, goal_pos, goal_orn)
 
-            target_pos, target_orn = advance_motion(motion_plan, speed, dt)
+            target_tcp_pos, target_orn = advance_motion(motion_plan, speed, dt)
+            target_flange_pos = flange_from_tcp(target_tcp_pos, target_orn, tcp_offset_local)
             current_joint_positions = [float(p.getJointState(robot_id, j)[0]) for j in controllable_joints]
 
             ik_solution = solve_ik(
                 robot_id,
                 ee_link_index,
-                target_pos,
+                target_flange_pos,
                 target_orn,
                 lower_limits,
                 upper_limits,

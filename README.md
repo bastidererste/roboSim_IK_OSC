@@ -110,6 +110,8 @@ python osc_position_test_simulator.py --sim-ip 127.0.0.1 --sim-port 9000 gui --b
 - `goal`: send a single target from CLI args.
 - `repl`: type targets in terminal.
 - `gui`: interactive controls.
+- RPY inputs in sender are **radians by default** (`--angle-unit rad`).
+- Use `--angle-unit deg` if you want degree-based sender inputs.
 
 Global args (`--sim-ip`, `--sim-port`, `--listen`, etc.) must come before mode name.
 
@@ -165,6 +167,7 @@ Common options:
 
 - `--robot-urdf kuka_iiwa/model.urdf`
 - `--ee-link-index <index>` to override auto-detected EE link.
+- `--tcp-offset TX TY TZ` to define TCP from EE link origin (local frame, meters).
 - `--default-speed <m/s>`
 - `--hz <rate>`
 - `--headless` for no GUI.

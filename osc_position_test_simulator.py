@@ -39,6 +39,20 @@ def quat_from_rpy(roll: float, pitch: float, yaw: float) -> tuple[float, float, 
     return normalize_quat(qx, qy, qz, qw)
 
 
+def to_radians(angle: float, angle_unit: str) -> float:
+    return math.radians(angle) if angle_unit == "deg" else angle
+
+
+def quat_from_user_rpy(roll: float, pitch: float, yaw: float, angle_unit: str) -> tuple[float, float, float, float]:
+    return quat_from_rpy(to_radians(roll, angle_unit), to_radians(pitch, angle_unit), to_radians(yaw, angle_unit))
+
+
+def angle_ui_config(angle_unit: str) -> tuple[str, float, float, float]:
+    if angle_unit == "deg":
+        return ("deg", -180.0, 180.0, 0.1)
+    return ("rad", -math.pi, math.pi, 0.001)
+
+
 def start_listener(ip: str, port: int) -> tuple[ThreadingOSCUDPServer, threading.Thread]:
     dispatcher = Dispatcher()
 
@@ -73,7 +87,7 @@ def run_goal_mode(args: argparse.Namespace, client: SimpleUDPClient) -> None:
     if args.quat is not None:
         quat = normalize_quat(args.quat[0], args.quat[1], args.quat[2], args.quat[3])
     else:
-        quat = quat_from_rpy(args.roll, args.pitch, args.yaw)
+        quat = quat_from_user_rpy(args.roll, args.pitch, args.yaw, args.angle_unit)
 
     send_goal(
         client=client,
@@ -94,9 +108,10 @@ def run_goal_mode(args: argparse.Namespace, client: SimpleUDPClient) -> None:
 
 
 def run_repl_mode(args: argparse.Namespace, client: SimpleUDPClient) -> None:
+    angle_unit = args.angle_unit
     print("Interactive mode.")
     print("Enter: x y z speed")
-    print("Or   : x y z roll pitch yaw speed")
+    print(f"Or   : x y z roll pitch yaw speed  (angles in {angle_unit})")
     print("Type 'q' or 'quit' to exit.")
 
     while True:
@@ -126,9 +141,9 @@ def run_repl_mode(args: argparse.Namespace, client: SimpleUDPClient) -> None:
             quat = quat_from_rpy(0.0, 0.0, 0.0)
         elif len(vals) == 7:
             x, y, z, roll, pitch, yaw, speed = vals
-            quat = quat_from_rpy(roll, pitch, yaw)
+            quat = quat_from_user_rpy(roll, pitch, yaw, angle_unit)
         else:
-            print("Use 4 values (x y z speed) or 7 values (x y z roll pitch yaw speed).")
+            print(f"Use 4 values (x y z speed) or 7 values (x y z roll pitch yaw speed, {angle_unit}).")
             continue
 
         send_goal(
@@ -175,13 +190,14 @@ def run_tk_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> None:
     }
     value_labels: dict[str, ttk.Label] = {}
 
+    angle_unit_label, angle_min, angle_max, angle_step = angle_ui_config(args.angle_unit)
     slider_specs = [
         ("x", "X (m)", args.x_min, args.x_max, 0.001),
         ("y", "Y (m)", args.y_min, args.y_max, 0.001),
         ("z", "Z (m)", args.z_min, args.z_max, 0.001),
-        ("roll", "Roll (rad)", -math.pi, math.pi, 0.001),
-        ("pitch", "Pitch (rad)", -math.pi, math.pi, 0.001),
-        ("yaw", "Yaw (rad)", -math.pi, math.pi, 0.001),
+        ("roll", f"Roll ({angle_unit_label})", angle_min, angle_max, angle_step),
+        ("pitch", f"Pitch ({angle_unit_label})", angle_min, angle_max, angle_step),
+        ("yaw", f"Yaw ({angle_unit_label})", angle_min, angle_max, angle_step),
         ("speed", "Speed (m/s)", 0.0, args.speed_max, 0.001),
     ]
 
@@ -229,7 +245,7 @@ def run_tk_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> None:
         roll = vars_by_name["roll"].get()
         pitch = vars_by_name["pitch"].get()
         yaw = vars_by_name["yaw"].get()
-        quat = quat_from_rpy(roll, pitch, yaw)
+        quat = quat_from_user_rpy(roll, pitch, yaw, args.angle_unit)
         return [
             vars_by_name["x"].get(),
             vars_by_name["y"].get(),
@@ -359,13 +375,14 @@ def run_pygame_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> No
     font = pygame.font.SysFont("Menlo", 16)
     small_font = pygame.font.SysFont("Menlo", 14)
 
+    angle_unit_label, angle_min, angle_max, _angle_step = angle_ui_config(args.angle_unit)
     slider_specs = [
         ("x", "X (m)", args.x_min, args.x_max, args.x),
         ("y", "Y (m)", args.y_min, args.y_max, args.y),
         ("z", "Z (m)", args.z_min, args.z_max, args.z),
-        ("roll", "Roll (rad)", -math.pi, math.pi, args.roll),
-        ("pitch", "Pitch (rad)", -math.pi, math.pi, args.pitch),
-        ("yaw", "Yaw (rad)", -math.pi, math.pi, args.yaw),
+        ("roll", f"Roll ({angle_unit_label})", angle_min, angle_max, args.roll),
+        ("pitch", f"Pitch ({angle_unit_label})", angle_min, angle_max, args.pitch),
+        ("yaw", f"Yaw ({angle_unit_label})", angle_min, angle_max, args.yaw),
         ("speed", "Speed (m/s)", 0.0, args.speed_max, args.speed),
     ]
     sliders: list[Slider] = [Slider(name, label, min_v, max_v, value, 78 + i * 45) for i, (name, label, min_v, max_v, value) in enumerate(slider_specs)]
@@ -425,7 +442,7 @@ def run_pygame_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> No
                 pitch = sliders_by_name["pitch"].value
                 yaw = sliders_by_name["yaw"].value
                 speed = max(0.0, sliders_by_name["speed"].value)
-                quat = quat_from_rpy(roll, pitch, yaw)
+                quat = quat_from_user_rpy(roll, pitch, yaw, args.angle_unit)
                 payload = [x, y, z, quat[0], quat[1], quat[2], quat[3], speed]
                 client.send_message("/tcp/goal", payload)
                 send_count += 1
@@ -434,7 +451,7 @@ def run_pygame_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> No
                 if (not args.quiet) and status_interval > 0.0 and (now - last_status >= status_interval):
                     print(
                         f"Sent #{send_count} xyz=({x:+.3f}, {y:+.3f}, {z:+.3f}) "
-                        f"rpy=({roll:+.2f}, {pitch:+.2f}, {yaw:+.2f}) speed={speed:.3f}",
+                        f"rpy=({roll:+.2f}, {pitch:+.2f}, {yaw:+.2f}) {args.angle_unit} speed={speed:.3f}",
                         flush=True,
                     )
                     last_status = now
@@ -455,10 +472,10 @@ def run_pygame_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> No
             roll = sliders_by_name["roll"].value
             pitch = sliders_by_name["pitch"].value
             yaw = sliders_by_name["yaw"].value
-            quat = quat_from_rpy(roll, pitch, yaw)
+            quat = quat_from_user_rpy(roll, pitch, yaw, args.angle_unit)
             footer = small_font.render(
                 f"q=({quat[0]:+.3f}, {quat[1]:+.3f}, {quat[2]:+.3f}, {quat[3]:+.3f})   "
-                f"send_hz={send_hz:.1f}   ui_hz={ui_hz:.1f}   sent={send_count}",
+                f"angles={args.angle_unit}   send_hz={send_hz:.1f}   ui_hz={ui_hz:.1f}   sent={send_count}",
                 True,
                 (167, 180, 204),
             )
@@ -482,6 +499,8 @@ def run_pybullet_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> 
     send_interval = 1.0 / send_hz
     ui_interval = 1.0 / ui_hz
     status_interval = 0.0 if args.status_hz <= 0.0 else (1.0 / float(args.status_hz))
+
+    angle_unit_label, angle_min, angle_max, _angle_step = angle_ui_config(args.angle_unit)
 
     client_id = p.connect(p.GUI)
     if client_id < 0:
@@ -512,9 +531,9 @@ def run_pybullet_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> 
         s_x = p.addUserDebugParameter("x (m)", args.x_min, args.x_max, args.x)
         s_y = p.addUserDebugParameter("y (m)", args.y_min, args.y_max, args.y)
         s_z = p.addUserDebugParameter("z (m)", args.z_min, args.z_max, args.z)
-        s_roll = p.addUserDebugParameter("roll (rad)", -math.pi, math.pi, args.roll)
-        s_pitch = p.addUserDebugParameter("pitch (rad)", -math.pi, math.pi, args.pitch)
-        s_yaw = p.addUserDebugParameter("yaw (rad)", -math.pi, math.pi, args.yaw)
+        s_roll = p.addUserDebugParameter(f"roll ({angle_unit_label})", angle_min, angle_max, args.roll)
+        s_pitch = p.addUserDebugParameter(f"pitch ({angle_unit_label})", angle_min, angle_max, args.pitch)
+        s_yaw = p.addUserDebugParameter(f"yaw ({angle_unit_label})", angle_min, angle_max, args.yaw)
         s_speed = p.addUserDebugParameter("speed (m/s)", 0.0, args.speed_max, args.speed)
 
         marker_bid: Optional[int] = None
@@ -558,7 +577,7 @@ def run_pybullet_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> 
                 time.sleep(0.01)
                 continue
 
-            quat = quat_from_rpy(roll, pitch, yaw)
+            quat = quat_from_user_rpy(roll, pitch, yaw, args.angle_unit)
 
             if marker_bid is not None:
                 xyz = (x, y, z)
@@ -580,7 +599,7 @@ def run_pybullet_gui_mode(args: argparse.Namespace, client: SimpleUDPClient) -> 
                 if (not args.quiet) and status_interval > 0.0 and (now - last_status >= status_interval):
                     print(
                         f"Sent #{send_count} xyz=({x:+.3f}, {y:+.3f}, {z:+.3f}) "
-                        f"rpy=({roll:+.2f}, {pitch:+.2f}, {yaw:+.2f}) speed={speed:.3f}",
+                        f"rpy=({roll:+.2f}, {pitch:+.2f}, {yaw:+.2f}) {args.angle_unit} speed={speed:.3f}",
                         flush=True,
                     )
                     last_status = now
@@ -621,6 +640,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OSC TCP goal sender for PyBullet arm simulator")
     parser.add_argument("--sim-ip", default="127.0.0.1", help="Simulator OSC input IP")
     parser.add_argument("--sim-port", type=int, default=9000, help="Simulator OSC input port")
+    parser.add_argument(
+        "--angle-unit",
+        choices=("deg", "rad"),
+        default="rad",
+        help="RPY unit for CLI/REPL/GUI controls (default: rad).",
+    )
     parser.add_argument("--repeat", type=int, default=3, help="How many times to repeat each sent goal")
     parser.add_argument("--interval", type=float, default=0.02, help="Delay between repeated sends (seconds)")
     parser.add_argument("--listen", action="store_true", help="Listen and print simulator OSC output")
@@ -635,10 +660,10 @@ def build_parser() -> argparse.ArgumentParser:
     goal.add_argument("--z", type=float, required=True, help="Target z (m)")
     goal_group = goal.add_mutually_exclusive_group()
     goal_group.add_argument("--quat", nargs=4, type=float, metavar=("QX", "QY", "QZ", "QW"), help="Target quaternion")
-    goal_group.add_argument("--rpy", nargs=3, type=float, metavar=("R", "P", "Y"), help="Target roll pitch yaw (rad)")
-    goal.add_argument("--roll", type=float, default=0.0, help="Roll (rad) if --quat/--rpy not used")
-    goal.add_argument("--pitch", type=float, default=0.0, help="Pitch (rad) if --quat/--rpy not used")
-    goal.add_argument("--yaw", type=float, default=0.0, help="Yaw (rad) if --quat/--rpy not used")
+    goal_group.add_argument("--rpy", nargs=3, type=float, metavar=("R", "P", "Y"), help="Target roll pitch yaw (unit: --angle-unit)")
+    goal.add_argument("--roll", type=float, default=0.0, help="Roll (unit: --angle-unit) if --quat/--rpy not used")
+    goal.add_argument("--pitch", type=float, default=0.0, help="Pitch (unit: --angle-unit) if --quat/--rpy not used")
+    goal.add_argument("--yaw", type=float, default=0.0, help="Yaw (unit: --angle-unit) if --quat/--rpy not used")
     goal.add_argument("--speed", type=float, default=0.2, help="Linear speed m/s")
 
     repl = subparsers.add_parser("repl", help="Interactive goal sender")
@@ -653,9 +678,9 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--x", type=float, default=0.45, help="Initial x (m)")
     gui.add_argument("--y", type=float, default=0.0, help="Initial y (m)")
     gui.add_argument("--z", type=float, default=0.35, help="Initial z (m)")
-    gui.add_argument("--roll", type=float, default=0.0, help="Initial roll (rad)")
-    gui.add_argument("--pitch", type=float, default=0.0, help="Initial pitch (rad)")
-    gui.add_argument("--yaw", type=float, default=0.0, help="Initial yaw (rad)")
+    gui.add_argument("--roll", type=float, default=0.0, help="Initial roll (unit: --angle-unit)")
+    gui.add_argument("--pitch", type=float, default=0.0, help="Initial pitch (unit: --angle-unit)")
+    gui.add_argument("--yaw", type=float, default=0.0, help="Initial yaw (unit: --angle-unit)")
     gui.add_argument("--speed", type=float, default=0.2, help="Initial speed (m/s)")
     gui.add_argument("--x-min", type=float, default=0.1, help="Minimum x slider value (m)")
     gui.add_argument("--x-max", type=float, default=0.9, help="Maximum x slider value (m)")
@@ -663,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--y-max", type=float, default=0.6, help="Maximum y slider value (m)")
     gui.add_argument("--z-min", type=float, default=0.1, help="Minimum z slider value (m)")
     gui.add_argument("--z-max", type=float, default=0.9, help="Maximum z slider value (m)")
-    gui.add_argument("--speed-max", type=float, default=1.0, help="Maximum speed slider value (m/s)")
+    gui.add_argument("--speed-max", type=float, default=10.0, help="Maximum speed slider value (m/s)")
     gui.add_argument("--send-hz", type=float, default=20.0, help="How fast to stream goals over OSC")
     gui.add_argument("--ui-hz", type=float, default=30.0, help="How fast to poll/update GUI controls")
     gui.add_argument("--status-hz", type=float, default=1.0, help="Console status print rate (set 0 to disable)")
