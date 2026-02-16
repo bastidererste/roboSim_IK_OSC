@@ -2,6 +2,12 @@
 
 Minimal PyBullet robot-arm simulator with two-way OSC, plus tools to send TCP goals from CLI, REPL, or GUI.
 
+## Demo
+
+![roboSim demo GIF placeholder](robosim.gif)
+
+_Placeholder: add a short GIF at `docs/demo.gif` showing simulator + TCP controller workflow._
+
 ## What This Setup Is
 
 This repo contains two Python apps that work together:
