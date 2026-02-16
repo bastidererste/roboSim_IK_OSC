@@ -81,10 +81,16 @@ python -c "import pygame; print(pygame.__version__)"
 
 ## Quick Start
 
-Run simulator:
+Run simulator (current recommended startup):
 
 ```bash
-python osc_pybullet_arm_sim.py --in-port 9000 --out-port 9001 --osc-out-hz 30 --fast-gui --send-joint-world-pos
+python osc_pybullet_arm_sim.py --in-port 9000 --out-port 9001 --osc-out-hz 30 --fast-gui --send-joint-world-pos --joint-output-deg
+```
+
+If you need Ventuz Y-axis handedness conversion, add:
+
+```bash
+python osc_pybullet_arm_sim.py --in-port 9000 --out-port 9001 --osc-out-hz 30 --fast-gui --send-joint-world-pos --joint-output-deg --coord-flip-y
 ```
 
 In another terminal, send one goal:
@@ -147,8 +153,8 @@ All values are floats.
 
 ## OSC Output API (Simulator Sends)
 
-- `/joint/<name>` -> joint position
-- `/joint_vel/<name>` -> joint velocity (when `--send-joint-vel`)
+- `/joint/<name>` -> joint position (radians by default, degrees with `--joint-output-deg` for revolute joints)
+- `/joint_vel/<name>` -> joint velocity (rad/s by default, deg/s with `--joint-output-deg` for revolute joints)
 - `/joint_world/<name>/x|y|z` -> joint world position (when `--send-joint-world-pos`)
 - `/ee/x`, `/ee/y`, `/ee/z` -> end-effector position (unless `--no-ee`)
 - `/sim/t` -> unix timestamp
@@ -163,6 +169,7 @@ Common options:
 - `--hz <rate>`
 - `--headless` for no GUI.
 - `--fast-gui` for lighter rendering.
+- `--joint-output-deg` to output revolute `/joint/*` and `/joint_vel/*` in degrees.
 
 ## Troubleshooting
 

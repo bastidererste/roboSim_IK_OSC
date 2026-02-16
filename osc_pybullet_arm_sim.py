@@ -275,17 +275,25 @@ class OSCBridge:
         robot_id: int,
         controllable_joints: list[int],
         joint_names: list[str],
+        joint_is_angular: list[bool],
         ee_link_index: int,
         emit_joint_vel: bool,
+        emit_joint_degrees: bool,
         emit_ee: bool,
         emit_joint_world_pos: bool,
     ) -> None:
         for idx, joint_index in enumerate(controllable_joints):
             js = p.getJointState(robot_id, joint_index)
             name = joint_names[idx]
-            self.client.send_message(f"/joint/{name}", float(js[0]))
+            joint_pos = float(js[0])
+            joint_vel = float(js[1])
+            if emit_joint_degrees and joint_is_angular[idx]:
+                joint_pos = math.degrees(joint_pos)
+                joint_vel = math.degrees(joint_vel)
+
+            self.client.send_message(f"/joint/{name}", joint_pos)
             if emit_joint_vel:
-                self.client.send_message(f"/joint_vel/{name}", float(js[1]))
+                self.client.send_message(f"/joint_vel/{name}", joint_vel)
             if emit_joint_world_pos:
                 ls = p.getLinkState(robot_id, joint_index, computeForwardKinematics=True)
                 if ls is not None:
@@ -363,9 +371,10 @@ def get_ee_pose(robot_id: int, ee_link_index: int) -> tuple[tuple[float, float, 
 
 def discover_controllable_joints(
     robot_id: int,
-) -> tuple[list[int], list[str], list[float], list[float], list[float]]:
+) -> tuple[list[int], list[str], list[bool], list[float], list[float], list[float]]:
     joints: list[int] = []
     names: list[str] = []
+    is_angular: list[bool] = []
     lowers: list[float] = []
     uppers: list[float] = []
     ranges: list[float] = []
@@ -379,6 +388,7 @@ def discover_controllable_joints(
 
         joints.append(j)
         names.append(sanitize_osc_segment(decode_name(info[1])))
+        is_angular.append(joint_type == p.JOINT_REVOLUTE)
 
         lo = float(info[8])
         hi = float(info[9])
@@ -397,7 +407,7 @@ def discover_controllable_joints(
         uppers.append(hi)
         ranges.append(span)
 
-    return joints, names, lowers, uppers, ranges
+    return joints, names, is_angular, lowers, uppers, ranges
 
 
 def resolve_ee_link_index(robot_id: int, controllable_joints: list[int], configured_index: Optional[int]) -> int:
@@ -482,6 +492,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--send-joint-vel", action="store_true", help="Also stream /joint_vel/<name>")
     parser.add_argument(
+        "--joint-output-deg",
+        action="store_true",
+        help="Output revolute /joint and /joint_vel values in degrees (prismatic joints stay linear units).",
+    )
+    parser.add_argument(
         "--send-joint-world-pos",
         action="store_true",
         help="Also stream world XYZ per controllable joint as /joint_world/<name>/(x|y|z).",
@@ -520,7 +535,7 @@ def main() -> None:
     p.loadURDF("plane.urdf")
     robot_id = p.loadURDF(args.robot_urdf, useFixedBase=True)
 
-    controllable_joints, joint_names, lower_limits, upper_limits, joint_ranges = discover_controllable_joints(robot_id)
+    controllable_joints, joint_names, joint_is_angular, lower_limits, upper_limits, joint_ranges = discover_controllable_joints(robot_id)
     if not controllable_joints:
         raise RuntimeError("No controllable (revolute/prismatic) joints found")
 
@@ -542,6 +557,7 @@ def main() -> None:
     print(f"Controllable joints ({len(controllable_joints)}): {', '.join(joint_names)}", flush=True)
     print(f"EE link index: {ee_link_index}", flush=True)
     print(f"Coord axis signs (x,y,z): ({axis_signs[0]:+.0f}, {axis_signs[1]:+.0f}, {axis_signs[2]:+.0f})", flush=True)
+    print(f"Joint output units: {'degrees for revolute joints' if args.joint_output_deg else 'radians'}", flush=True)
     if args.osc_out_hz > 0.0:
         print(f"OSC output rate: {args.osc_out_hz:.2f} Hz", flush=True)
     else:
@@ -594,8 +610,10 @@ def main() -> None:
                     robot_id=robot_id,
                     controllable_joints=controllable_joints,
                     joint_names=joint_names,
+                    joint_is_angular=joint_is_angular,
                     ee_link_index=ee_link_index,
                     emit_joint_vel=args.send_joint_vel,
+                    emit_joint_degrees=args.joint_output_deg,
                     emit_ee=emit_ee,
                     emit_joint_world_pos=args.send_joint_world_pos,
                 )
