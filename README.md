@@ -4,9 +4,7 @@ Minimal PyBullet robot-arm simulator with two-way OSC, plus tools to send TCP go
 
 ## Demo
 
-![roboSim demo GIF placeholder](robosim.gif)
-
-_Placeholder: add a short GIF at `docs/demo.gif` showing simulator + TCP controller workflow._
+![roboSim demo](roboSim.gif)
 
 ## What This Setup Is
 
