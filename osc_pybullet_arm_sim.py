@@ -52,6 +52,19 @@ def vec_len(a: tuple[float, float, float]) -> float:
     return math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
 
 
+def map_pos_axes(pos: tuple[float, float, float], axis_signs: tuple[float, float, float]) -> tuple[float, float, float]:
+    sx, sy, sz = axis_signs
+    return (sx * pos[0], sy * pos[1], sz * pos[2])
+
+
+def map_quat_axes(
+    quat: tuple[float, float, float, float], axis_signs: tuple[float, float, float]
+) -> tuple[float, float, float, float]:
+    # Reflection mapping for R' = S * R * S where S=diag(sx, sy, sz), s in {-1, +1}.
+    sx, sy, sz = axis_signs
+    return (sy * sz * quat[0], sx * sz * quat[1], sx * sy * quat[2], quat[3])
+
+
 def normalize_quat(q: tuple[float, float, float, float]) -> Optional[tuple[float, float, float, float]]:
     if len(q) != 4:
         return None
@@ -126,8 +139,15 @@ class SharedTargetState:
 
 
 class OSCBridge:
-    def __init__(self, shared: SharedTargetState, out_ip: str, out_port: int) -> None:
+    def __init__(
+        self,
+        shared: SharedTargetState,
+        out_ip: str,
+        out_port: int,
+        axis_signs: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    ) -> None:
         self.shared = shared
+        self.axis_signs = axis_signs
         self.client = SimpleUDPClient(out_ip, out_port)
         self.dispatcher = Dispatcher()
         self.server: Optional[ThreadingOSCUDPServer] = None
@@ -156,13 +176,24 @@ class OSCBridge:
             out.append(fv)
         return out
 
+    def _osc_to_sim_pos(self, pos: tuple[float, float, float]) -> tuple[float, float, float]:
+        return map_pos_axes(pos, self.axis_signs)
+
+    def _sim_to_osc_pos(self, pos: tuple[float, float, float]) -> tuple[float, float, float]:
+        # Inverse is identical for sign-flip mapping.
+        return map_pos_axes(pos, self.axis_signs)
+
+    def _osc_to_sim_quat(self, quat: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        return map_quat_axes(quat, self.axis_signs)
+
     def _on_tcp_xyz(self, _addr: str, *args: object) -> None:
         vals = self._parse_floats(args, 3)
         if vals is None:
             print("Invalid /tcp/xyz payload; expected 3 floats", flush=True)
             return
+        sim_pos = self._osc_to_sim_pos((vals[0], vals[1], vals[2]))
         with self.shared.lock:
-            self.shared.target_pos = (vals[0], vals[1], vals[2])
+            self.shared.target_pos = sim_pos
             self.shared.new_goal = True
 
     def _on_tcp_rpy(self, _addr: str, *args: object) -> None:
@@ -170,8 +201,9 @@ class OSCBridge:
         if vals is None:
             print("Invalid /tcp/rpy payload; expected 3 floats", flush=True)
             return
-        quat = p.getQuaternionFromEuler((vals[0], vals[1], vals[2]))
-        qn = normalize_quat((float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])))
+        quat = p.getQuaternionFromEuler((vals[0], vals[1], vals[2]))  # In OSC frame.
+        sim_quat = self._osc_to_sim_quat((float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])))
+        qn = normalize_quat(sim_quat)
         if qn is None:
             print("Invalid quaternion generated from /tcp/rpy", flush=True)
             return
@@ -184,7 +216,7 @@ class OSCBridge:
         if vals is None:
             print("Invalid /tcp/quat payload; expected 4 floats", flush=True)
             return
-        qn = normalize_quat((vals[0], vals[1], vals[2], vals[3]))
+        qn = normalize_quat(self._osc_to_sim_quat((vals[0], vals[1], vals[2], vals[3])))
         if qn is None:
             print("Rejected /tcp/quat due to zero or non-finite quaternion", flush=True)
             return
@@ -205,12 +237,13 @@ class OSCBridge:
         if vals is None:
             print("Invalid /tcp/goal payload; expected 8 floats", flush=True)
             return
-        qn = normalize_quat((vals[3], vals[4], vals[5], vals[6]))
+        sim_pos = self._osc_to_sim_pos((vals[0], vals[1], vals[2]))
+        qn = normalize_quat(self._osc_to_sim_quat((vals[3], vals[4], vals[5], vals[6])))
         if qn is None:
             print("Rejected /tcp/goal due to invalid quaternion", flush=True)
             return
         with self.shared.lock:
-            self.shared.target_pos = (vals[0], vals[1], vals[2])
+            self.shared.target_pos = sim_pos
             self.shared.target_orn = qn
             self.shared.speed = max(0.0, vals[7])
             self.shared.new_goal = True
@@ -257,15 +290,17 @@ class OSCBridge:
                 ls = p.getLinkState(robot_id, joint_index, computeForwardKinematics=True)
                 if ls is not None:
                     pos_raw = ls[4] if len(ls) > 4 and ls[4] is not None else ls[0]
-                    self.client.send_message(f"/joint_world/{name}/x", float(pos_raw[0]))
-                    self.client.send_message(f"/joint_world/{name}/y", float(pos_raw[1]))
-                    self.client.send_message(f"/joint_world/{name}/z", float(pos_raw[2]))
+                    pos = self._sim_to_osc_pos((float(pos_raw[0]), float(pos_raw[1]), float(pos_raw[2])))
+                    self.client.send_message(f"/joint_world/{name}/x", float(pos[0]))
+                    self.client.send_message(f"/joint_world/{name}/y", float(pos[1]))
+                    self.client.send_message(f"/joint_world/{name}/z", float(pos[2]))
 
         if emit_ee:
             ee_pos, _ = get_ee_pose(robot_id, ee_link_index)
-            self.client.send_message("/ee/x", float(ee_pos[0]))
-            self.client.send_message("/ee/y", float(ee_pos[1]))
-            self.client.send_message("/ee/z", float(ee_pos[2]))
+            out_ee_pos = self._sim_to_osc_pos(ee_pos)
+            self.client.send_message("/ee/x", float(out_ee_pos[0]))
+            self.client.send_message("/ee/y", float(out_ee_pos[1]))
+            self.client.send_message("/ee/z", float(out_ee_pos[2]))
 
         self.client.send_message("/sim/t", float(time.time()))
 
@@ -452,6 +487,9 @@ def parse_args() -> argparse.Namespace:
         help="Also stream world XYZ per controllable joint as /joint_world/<name>/(x|y|z).",
     )
     parser.add_argument("--no-ee", action="store_true", help="Disable /ee/x /ee/y /ee/z outputs")
+    parser.add_argument("--coord-flip-x", action="store_true", help="Mirror X axis between OSC and simulator frames")
+    parser.add_argument("--coord-flip-y", action="store_true", help="Mirror Y axis between OSC and simulator frames")
+    parser.add_argument("--coord-flip-z", action="store_true", help="Mirror Z axis between OSC and simulator frames")
     return parser.parse_args()
 
 
@@ -489,8 +527,13 @@ def main() -> None:
     ee_link_index = resolve_ee_link_index(robot_id, controllable_joints, args.ee_link_index)
     init_pos, init_orn = get_ee_pose(robot_id, ee_link_index)
 
+    axis_signs = (
+        -1.0 if args.coord_flip_x else 1.0,
+        -1.0 if args.coord_flip_y else 1.0,
+        -1.0 if args.coord_flip_z else 1.0,
+    )
     shared = SharedTargetState(init_pos, init_orn, args.default_speed)
-    osc = OSCBridge(shared, args.out_ip, args.out_port)
+    osc = OSCBridge(shared, args.out_ip, args.out_port, axis_signs=axis_signs)
     osc.start_server(args.in_ip, args.in_port)
 
     print(f"OSC IN : {args.in_ip}:{args.in_port}", flush=True)
@@ -498,6 +541,7 @@ def main() -> None:
     print(f"Robot URDF: {args.robot_urdf}", flush=True)
     print(f"Controllable joints ({len(controllable_joints)}): {', '.join(joint_names)}", flush=True)
     print(f"EE link index: {ee_link_index}", flush=True)
+    print(f"Coord axis signs (x,y,z): ({axis_signs[0]:+.0f}, {axis_signs[1]:+.0f}, {axis_signs[2]:+.0f})", flush=True)
     if args.osc_out_hz > 0.0:
         print(f"OSC output rate: {args.osc_out_hz:.2f} Hz", flush=True)
     else:

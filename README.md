@@ -36,6 +36,25 @@ Motion details:
 - Position: linear interpolation in XYZ at configured speed.
 - Rotation: quaternion slerp interpolation.
 
+## Coordinate System / Handedness
+
+If your upstream tool (for example Ventuz) uses a different handedness, use axis-flip flags in the simulator:
+
+- `--coord-flip-x`
+- `--coord-flip-y`
+- `--coord-flip-z`
+
+For a typical Y-axis handedness mismatch, start the simulator with:
+
+```bash
+python osc_pybullet_arm_sim.py --in-port 9000 --out-port 9001 --coord-flip-y
+```
+
+These flips are applied consistently to:
+
+- Incoming TCP position/orientation from OSC
+- Outgoing EE and joint world XYZ OSC streams
+
 ## Requirements
 
 - Python 3.10+ recommended
