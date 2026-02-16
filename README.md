@@ -1,6 +1,11 @@
 # roboSim
 
-Minimal PyBullet robot-arm simulator with two-way OSC, plus tools to send TCP goals from CLI, REPL, or GUI.
+TCP-first robot simulation workflow:
+
+- A Tool Center Point (TCP) target (`position + rotation`) is sent to the simulator via OSC.
+- The simulator solves IK and moves the robot to that TCP pose.
+- External tools (Ventuz, Unity, or similar) can feed/render this movement pipeline for an R3 robot workflow.
+- For local testing, this repo includes a dedicated TCP sender tool.
 
 ## Demo
 
@@ -10,21 +15,26 @@ Minimal PyBullet robot-arm simulator with two-way OSC, plus tools to send TCP go
 
 This repo contains two Python apps that work together:
 
-- `osc_pybullet_arm_sim.py`: runs a PyBullet robot arm, receives TCP goals over OSC, solves IK, and streams sim state back over OSC.
-- `osc_position_test_simulator.py`: sends TCP goals to the simulator (`/tcp/goal`, `/tcp/xyz`, etc.) from command line, interactive REPL, or GUI backends (`tk`, `pygame`, or `pybullet`).
+- `osc_pybullet_arm_sim.py`: receives TCP goals over OSC (`pos/rot`), solves IK, and moves the robot in PyBullet.
+- `osc_position_test_simulator.py`: TCP sender/testing tool for feeding goals (`/tcp/goal`, `/tcp/xyz`, `/tcp/rpy`, etc.) from CLI, REPL, or GUI backends (`tk`, `pygame`, `pybullet`).
 
 Use case:
 
-- Control robot TCP position + orientation dynamically.
-- Integrate with Unity/TouchDesigner/Max/MSP/other OSC-capable tools.
-- Rapidly test pose targets and motion speed.
+- Feed TCP targets from Ventuz/Unity/other OSC-capable systems.
+- Validate TCP position/rotation behavior and IK response before final integration.
+- Use the built-in sender to test without external tooling.
 
 ## How It Works
 
-- Simulator listens for OSC input on `--in-port` (default `9000`).
-- Sender tool sends goals to that port (`--sim-port`, default `9000`).
-- Simulator streams state back on `--out-port` (default `9001`).
-- Motion is linear in XYZ at configured speed, with quaternion slerp for orientation interpolation.
+1. External source (Ventuz, Unity, or the included sender) sends TCP pose over OSC.
+2. Simulator listens on `--in-port` (default `9000`) and receives `position + rotation`.
+3. Simulator computes IK and drives the robot toward that TCP target.
+4. Simulator streams state back on `--out-port` (default `9001`).
+
+Motion details:
+
+- Position: linear interpolation in XYZ at configured speed.
+- Rotation: quaternion slerp interpolation.
 
 ## Requirements
 
